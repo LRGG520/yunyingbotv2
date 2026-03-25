@@ -245,6 +245,49 @@ type SourceDetail = {
     latestBlock: string | null;
     balance: string | null;
     hasCode: boolean | null;
+    contractProfile: {
+      detectedInterfaces: string[];
+      tokenMetadata: {
+        name: string | null;
+        symbol: string | null;
+        decimals: string | null;
+        totalSupply: string | null;
+      };
+      ownership: {
+        owner: string | null;
+      };
+      proxy: {
+        implementationAddress: string | null;
+      };
+    } | null;
+    roleAssessment: {
+      roleGuess: string | null;
+      confidence: "low" | "medium" | "high" | null;
+      reason: string | null;
+      nextStepHint: string | null;
+      analysisMode: "remote_llm" | "rule_fallback" | null;
+    } | null;
+    codeFeatures: {
+      bytecodeLength: number | null;
+      selectorCount: number | null;
+      detectedFeatures: string[];
+      matchedSelectors: string[];
+      codeShape: "standard_like" | "standard_extended" | "non_standard" | null;
+      complexityHint: "low" | "medium" | "high" | null;
+      featureReason: string | null;
+      boundaryNote: string | null;
+    } | null;
+    lpCandidates: Array<{
+      id: string;
+      dexLabel: string;
+      quoteTokenLabel: string;
+      lpAddress: string;
+      confidence: string;
+      rationale: string;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
   } | null;
   relatedRuns: CollectionRun[];
 };
@@ -377,6 +420,9 @@ const evidenceTypeLabel = (evidenceType?: string | null) => {
     twitter_page_capture: "页面采集记录",
     twitter_profile: "账号资料",
     onchain_metric: "链上指标",
+    onchain_contract_profile: "合约规则探测",
+    onchain_code_features: "代码特征检测",
+    onchain_role_assessment: "合约角色识别",
     community_window_summary: "社区窗口摘要",
     community_structure_metrics: "社区结构指标",
     community_message_sample: "社区消息样本",
@@ -485,6 +531,33 @@ const onchainL1Summary = (detail?: SourceDetail["onchainDetail"] | null) => {
 
 const onchainL1BoundaryText =
   "这一层只负责确认“它是不是合约、它在哪条链、基础读取是否正常、是否有原生币余额”，暂不判断合约角色、资金流或项目级链上画像。";
+
+const onchainRoleConfidenceLabel = (value?: "low" | "medium" | "high" | null) => {
+  if (value === "high") return "高";
+  if (value === "medium") return "中";
+  if (value === "low") return "低";
+  return "--";
+};
+
+const onchainAnalysisModeLabel = (value?: "remote_llm" | "rule_fallback" | null) => {
+  if (value === "remote_llm") return "规则识别 + LLM 归纳";
+  if (value === "rule_fallback") return "规则识别回退";
+  return "未识别";
+};
+
+const onchainCodeShapeLabel = (value?: "standard_like" | "standard_extended" | "non_standard" | null) => {
+  if (value === "standard_like") return "标准型";
+  if (value === "standard_extended") return "标准扩展型";
+  if (value === "non_standard") return "非标准型";
+  return "--";
+};
+
+const lpCandidateStatusLabel = (value?: string | null) => {
+  if (value === "confirmed") return "已确认";
+  if (value === "ignored") return "已忽略";
+  if (value === "pending") return "待确认";
+  return "未知";
+};
 
 const CHAIN_OPTIONS = [
   { value: "ethereum", label: "Ethereum" },
@@ -715,6 +788,36 @@ export default function App() {
     await refreshSelectedTask(selectedTaskId);
     await refreshTasks();
     setActionState("人工复核已生效。");
+  };
+
+  const handleDiscoverLpCandidates = async () => {
+    if (!selectedTaskId || !selectedSourceId) return;
+    setActionState("正在检索相关 LP 候选...");
+    const response = await fetch(`/tasks/${selectedTaskId}/sources/${selectedSourceId}/discover-lp-candidates`, {
+      method: "POST"
+    });
+    const payload = (await response.json()) as { warnings?: string[]; candidates?: Array<{ lpAddress: string }> };
+    setLastCollectionResult({
+      warnings: payload.warnings ?? [],
+      evidenceCount: 0,
+      collectedSources: (payload.candidates ?? []).map((item) => item.lpAddress),
+      skippedSources: []
+    });
+    await refreshSelectedTask(selectedTaskId);
+    setActionState("LP 候选已刷新。");
+  };
+
+  const handleLpCandidateAction = async (candidateId: string, action: "confirm" | "ignore") => {
+    if (!selectedTaskId) return;
+    setActionState(action === "confirm" ? "正在确认 LP 候选..." : "正在忽略 LP 候选...");
+    await fetch(`/tasks/${selectedTaskId}/lp-candidates/${candidateId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    });
+    await refreshSelectedTask(selectedTaskId);
+    await refreshTasks();
+    setActionState(action === "confirm" ? "LP 候选已确认。" : "LP 候选已忽略。");
   };
 
   const handleCreateTask = async () => {
@@ -1104,6 +1207,128 @@ export default function App() {
                       <span className="chip">角色备注：暂未填写</span>
                     )}
                   </div>
+
+                  {sourceDetail.onchainDetail?.contractProfile ? (
+                    <section className="factor-metric-strip">
+                      <div className="panel-title-row">
+                        <h5>规则识别结果</h5>
+                        <span className="panel-tag">
+                          {sourceDetail.onchainDetail.contractProfile.detectedInterfaces.length
+                            ? `${sourceDetail.onchainDetail.contractProfile.detectedInterfaces.length} 项特征`
+                            : "未识别明显特征"}
+                        </span>
+                      </div>
+                      <div className="dimension-grid metric-grid">
+                        <div className="dimension-card static-card"><span>名称</span><strong>{sourceDetail.onchainDetail.contractProfile.tokenMetadata.name ?? "--"}</strong></div>
+                        <div className="dimension-card static-card"><span>符号</span><strong>{sourceDetail.onchainDetail.contractProfile.tokenMetadata.symbol ?? "--"}</strong></div>
+                        <div className="dimension-card static-card"><span>精度</span><strong>{sourceDetail.onchainDetail.contractProfile.tokenMetadata.decimals ?? "--"}</strong></div>
+                        <div className="dimension-card static-card"><span>总供应</span><strong>{sourceDetail.onchainDetail.contractProfile.tokenMetadata.totalSupply ?? "--"}</strong></div>
+                        <div className="dimension-card static-card"><span>Owner</span><strong>{sourceDetail.onchainDetail.contractProfile.ownership.owner ?? "--"}</strong></div>
+                        <div className="dimension-card static-card"><span>Implementation</span><strong>{sourceDetail.onchainDetail.contractProfile.proxy.implementationAddress ?? "--"}</strong></div>
+                      </div>
+                      <div className="chip-row">
+                        {sourceDetail.onchainDetail.contractProfile.detectedInterfaces.length ? (
+                          sourceDetail.onchainDetail.contractProfile.detectedInterfaces.map((item) => (
+                            <span key={item} className="chip">{item}</span>
+                          ))
+                        ) : (
+                          <span className="chip">暂未识别到明显标准接口</span>
+                        )}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {sourceDetail.onchainDetail?.codeFeatures ? (
+                    <section className="factor-metric-strip">
+                      <div className="panel-title-row">
+                        <h5>链上 L2.5 代码特征检测</h5>
+                        <span className="panel-tag">{onchainCodeShapeLabel(sourceDetail.onchainDetail.codeFeatures.codeShape)}</span>
+                      </div>
+                      <p className="muted">
+                        {sourceDetail.onchainDetail.codeFeatures.featureReason ?? "当前还没有形成稳定的代码特征判断。"}
+                      </p>
+                      <div className="dimension-grid metric-grid">
+                        <div className="dimension-card static-card"><span>字节码长度</span><strong>{formatMetric(sourceDetail.onchainDetail.codeFeatures.bytecodeLength)}</strong></div>
+                        <div className="dimension-card static-card"><span>识别到的选择器</span><strong>{formatMetric(sourceDetail.onchainDetail.codeFeatures.selectorCount)}</strong></div>
+                        <div className="dimension-card static-card"><span>复杂度提示</span><strong>{sourceDetail.onchainDetail.codeFeatures.complexityHint ?? "--"}</strong></div>
+                      </div>
+                      <div className="chip-row">
+                        {sourceDetail.onchainDetail.codeFeatures.detectedFeatures.length ? (
+                          sourceDetail.onchainDetail.codeFeatures.detectedFeatures.map((item) => (
+                            <span key={item} className="chip">{item}</span>
+                          ))
+                        ) : (
+                          <span className="chip">暂未识别到明显代码特征</span>
+                        )}
+                      </div>
+                      {sourceDetail.onchainDetail.codeFeatures.matchedSelectors.length ? (
+                        <div className="chip-row">
+                          {sourceDetail.onchainDetail.codeFeatures.matchedSelectors.slice(0, 8).map((item) => (
+                            <span key={item} className="chip">{item}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {sourceDetail.onchainDetail.codeFeatures.boundaryNote ? (
+                        <p className="muted">{sourceDetail.onchainDetail.codeFeatures.boundaryNote}</p>
+                      ) : null}
+                    </section>
+                  ) : null}
+
+                  {sourceDetail.onchainDetail?.roleAssessment ? (
+                    <section className="factor-metric-strip">
+                      <div className="panel-title-row">
+                        <h5>链上 L2 合约角色识别</h5>
+                        <span className="panel-tag">{sourceDetail.onchainDetail.roleAssessment.roleGuess ?? "Unknown"}</span>
+                      </div>
+                      <p className="muted">
+                        {sourceDetail.onchainDetail.roleAssessment.reason ?? "当前还没有形成稳定的角色判断。"}
+                      </p>
+                      <div className="chip-row">
+                        <span className="chip">置信度：{onchainRoleConfidenceLabel(sourceDetail.onchainDetail.roleAssessment.confidence)}</span>
+                        <span className="chip">分析方式：{onchainAnalysisModeLabel(sourceDetail.onchainDetail.roleAssessment.analysisMode)}</span>
+                      </div>
+                      {sourceDetail.onchainDetail.roleAssessment.nextStepHint ? (
+                        <p className="muted">{sourceDetail.onchainDetail.roleAssessment.nextStepHint}</p>
+                      ) : null}
+                    </section>
+                  ) : null}
+
+                  <section className="factor-metric-strip">
+                    <div className="panel-title-row">
+                      <h5>相关 LP 候选</h5>
+                      <button type="button" className="submit-review" onClick={handleDiscoverLpCandidates}>
+                        自动检索
+                      </button>
+                    </div>
+                    {sourceDetail.onchainDetail?.lpCandidates?.length ? (
+                      <div className="evidence-stack">
+                        {sourceDetail.onchainDetail.lpCandidates.map((candidate) => (
+                          <div key={candidate.id} className="evidence-card">
+                            <span className="evidence-type">{candidate.dexLabel}</span>
+                            <strong>{candidate.lpAddress}</strong>
+                            <p>{candidate.rationale}</p>
+                            <div className="chip-row">
+                              <span className="chip">配对资产：{candidate.quoteTokenLabel}</span>
+                              <span className="chip">置信度：{candidate.confidence}</span>
+                              <span className="chip">{lpCandidateStatusLabel(candidate.status)}</span>
+                            </div>
+                            {candidate.status === "pending" ? (
+                              <div className="chip-row">
+                                <button type="button" className="submit-review" onClick={() => handleLpCandidateAction(candidate.id, "confirm")}>
+                                  确认纳入
+                                </button>
+                                <button type="button" className="ghost-action" onClick={() => handleLpCandidateAction(candidate.id, "ignore")}>
+                                  忽略
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">当前还没有 LP 候选。可先点击“自动检索”，再人工确认是否纳入。</p>
+                    )}
+                  </section>
                 </div>
               ) : null}
 

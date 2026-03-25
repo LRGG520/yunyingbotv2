@@ -127,7 +127,18 @@ const inferProjectName = (inputs: TaskInputPayload[], candidates: SourceCandidat
 
   const textInput = inputs.find((input) => input.type === "text");
   if (textInput) {
-    return textInput.value.slice(0, 32).trim() || "unknown-project";
+    const meaningfulText = inputs
+      .filter((input) => input.type === "text")
+      .map((input) => input.value.trim())
+      .find((value) => value.length > 0 && !/^chain:/i.test(value));
+    if (meaningfulText) {
+      return meaningfulText.slice(0, 32).trim() || "unknown-project";
+    }
+  }
+
+  const contractCandidate = candidates.find((candidate) => candidate.sourceType === "contract");
+  if (contractCandidate) {
+    return `${contractCandidate.sourceUrl.slice(0, 8)}...`;
   }
 
   return "unknown-project";

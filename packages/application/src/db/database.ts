@@ -209,6 +209,25 @@ const schemaStatements = [
     FOREIGN KEY(task_id) REFERENCES analysis_tasks(id),
     FOREIGN KEY(source_id) REFERENCES sources(id)
   )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS onchain_lp_candidates (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    chain_key TEXT NOT NULL,
+    dex_label TEXT NOT NULL,
+    quote_token_label TEXT NOT NULL,
+    lp_address TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_id, lp_address),
+    FOREIGN KEY(task_id) REFERENCES analysis_tasks(id),
+    FOREIGN KEY(source_id) REFERENCES sources(id)
+  )
   `
 ];
 

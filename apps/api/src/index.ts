@@ -9,9 +9,11 @@ import {
   collectTwitterBrowser,
   collectPublicWebDocs,
   collectTwitterPublic,
+  confirmLpCandidate,
   createAnalysisTask,
   createVersionSnapshot,
   deleteTask,
+  discoverLpCandidates,
   getFactorDetail,
   getFinalAnalysisReport,
   getDatabase,
@@ -283,6 +285,41 @@ const server = http.createServer(async (req, res) => {
     }
     sendJson(res, 200, detail);
     return;
+  }
+
+  const discoverLpCandidateMatch = url.pathname.match(/^\/tasks\/([^/]+)\/sources\/([^/]+)\/discover-lp-candidates$/);
+  if (req.method === "POST" && discoverLpCandidateMatch) {
+    const [, taskId, sourceId] = discoverLpCandidateMatch;
+    try {
+      const result = await discoverLpCandidates(db, repoRoot, taskId, sourceId);
+      sendJson(res, 200, result);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown_error";
+      sendJson(res, message.includes("not_found") ? 404 : 500, {
+        error: "discover_lp_candidates_failed",
+        message
+      });
+      return;
+    }
+  }
+
+  const confirmLpCandidateMatch = url.pathname.match(/^\/tasks\/([^/]+)\/lp-candidates\/([^/]+)$/);
+  if (req.method === "POST" && confirmLpCandidateMatch) {
+    const [, taskId, candidateId] = confirmLpCandidateMatch;
+    try {
+      const body = await readJsonBody<{ action: "confirm" | "ignore" }>(req);
+      const result = confirmLpCandidate(db, taskId, candidateId, body.action);
+      sendJson(res, 200, result);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown_error";
+      sendJson(res, message.includes("not_found") ? 404 : 500, {
+        error: "confirm_lp_candidate_failed",
+        message
+      });
+      return;
+    }
   }
 
   const communityEvidenceMatch = url.pathname.match(/^\/tasks\/([^/]+)\/sources\/([^/]+)\/community-evidence$/);

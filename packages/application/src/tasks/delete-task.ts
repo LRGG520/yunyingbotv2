@@ -19,6 +19,7 @@ export const deleteTask = (db: DatabaseSync, taskId: string) => {
     db.prepare(`DELETE FROM dimensions WHERE task_id = ?`).run(taskId);
     db.prepare(`DELETE FROM reports WHERE task_id = ?`).run(taskId);
     db.prepare(`DELETE FROM evidences WHERE task_id = ?`).run(taskId);
+    db.prepare(`DELETE FROM onchain_lp_candidates WHERE task_id = ?`).run(taskId);
     db.prepare(`DELETE FROM onchain_source_contexts WHERE task_id = ?`).run(taskId);
     db.prepare(`DELETE FROM community_source_contexts WHERE task_id = ?`).run(taskId);
     db.prepare(`DELETE FROM sources WHERE task_id = ?`).run(taskId);

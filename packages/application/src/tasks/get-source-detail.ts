@@ -77,6 +77,46 @@ interface OnchainRawPayload {
   hasCode?: boolean;
 }
 
+interface OnchainContractProfilePayload {
+  chainKey?: string;
+  chainLabel?: string;
+  latestBlock?: string;
+  hasCode?: boolean;
+  nativeBalance?: string;
+  tokenMetadata?: {
+    name?: string | null;
+    symbol?: string | null;
+    decimals?: string | null;
+    totalSupply?: string | null;
+  };
+  ownership?: {
+    owner?: string | null;
+  };
+  proxy?: {
+    implementationAddress?: string | null;
+  };
+  detectedInterfaces?: string[];
+}
+
+interface OnchainRoleAssessmentPayload {
+  roleGuess?: string;
+  confidence?: "low" | "medium" | "high";
+  reason?: string;
+  nextStepHint?: string;
+  analysisMode?: "remote_llm" | "rule_fallback";
+}
+
+interface OnchainCodeFeaturePayload {
+  bytecodeLength?: number;
+  selectorCount?: number;
+  detectedFeatures?: string[];
+  matchedSelectors?: string[];
+  codeShape?: "standard_like" | "standard_extended" | "non_standard";
+  complexityHint?: "low" | "medium" | "high";
+  featureReason?: string;
+  boundaryNote?: string;
+}
+
 export const getSourceDetail = (db: DatabaseSync, taskId: string, sourceId: string) => {
   const source = db
     .prepare(
@@ -257,6 +297,46 @@ export const getSourceDetail = (db: DatabaseSync, taskId: string, sourceId: stri
     .map((evidence) => parseJsonObject<OnchainRawPayload>((evidence as { raw_content?: string | null }).raw_content))
     .find((value) => value !== null) ?? null;
 
+  const onchainContractProfile = evidences
+    .filter((evidence) => (evidence as { evidence_type: string }).evidence_type === "onchain_contract_profile")
+    .map((evidence) =>
+      parseJsonObject<OnchainContractProfilePayload>((evidence as { raw_content?: string | null }).raw_content)
+    )
+    .find((value) => value !== null) ?? null;
+
+  const onchainRoleAssessment = evidences
+    .filter((evidence) => (evidence as { evidence_type: string }).evidence_type === "onchain_role_assessment")
+    .map((evidence) =>
+      parseJsonObject<OnchainRoleAssessmentPayload>((evidence as { raw_content?: string | null }).raw_content)
+    )
+    .find((value) => value !== null) ?? null;
+
+  const onchainCodeFeatures = evidences
+    .filter((evidence) => (evidence as { evidence_type: string }).evidence_type === "onchain_code_features")
+    .map((evidence) =>
+      parseJsonObject<OnchainCodeFeaturePayload>((evidence as { raw_content?: string | null }).raw_content)
+    )
+    .find((value) => value !== null) ?? null;
+
+  const lpCandidates = db
+    .prepare(
+      `SELECT id, dex_label, quote_token_label, lp_address, confidence, rationale, status, created_at, updated_at
+       FROM onchain_lp_candidates
+       WHERE task_id = ? AND source_id = ?
+       ORDER BY created_at DESC`
+    )
+    .all(taskId, sourceId) as Array<{
+    id: string;
+    dex_label: string;
+    quote_token_label: string;
+    lp_address: string;
+    confidence: string;
+    rationale: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+
   return {
     source,
     evidences,
@@ -323,7 +403,56 @@ export const getSourceDetail = (db: DatabaseSync, taskId: string, sourceId: stri
             contractRoleHint: onchainContext?.contract_role_hint ?? null,
             latestBlock: onchainMetric?.latestBlock ?? null,
             balance: onchainMetric?.balance ?? null,
-            hasCode: onchainMetric?.hasCode ?? null
+            hasCode: onchainMetric?.hasCode ?? null,
+            contractProfile: onchainContractProfile
+              ? {
+                  detectedInterfaces: onchainContractProfile.detectedInterfaces ?? [],
+                  tokenMetadata: {
+                    name: onchainContractProfile.tokenMetadata?.name ?? null,
+                    symbol: onchainContractProfile.tokenMetadata?.symbol ?? null,
+                    decimals: onchainContractProfile.tokenMetadata?.decimals ?? null,
+                    totalSupply: onchainContractProfile.tokenMetadata?.totalSupply ?? null
+                  },
+                  ownership: {
+                    owner: onchainContractProfile.ownership?.owner ?? null
+                  },
+                  proxy: {
+                    implementationAddress: onchainContractProfile.proxy?.implementationAddress ?? null
+                  }
+                }
+              : null,
+            roleAssessment: onchainRoleAssessment
+              ? {
+                  roleGuess: onchainRoleAssessment.roleGuess ?? null,
+                  confidence: onchainRoleAssessment.confidence ?? null,
+                  reason: onchainRoleAssessment.reason ?? null,
+                  nextStepHint: onchainRoleAssessment.nextStepHint ?? null,
+                  analysisMode: onchainRoleAssessment.analysisMode ?? null
+                }
+              : null,
+            codeFeatures: onchainCodeFeatures
+              ? {
+                  bytecodeLength: onchainCodeFeatures.bytecodeLength ?? null,
+                  selectorCount: onchainCodeFeatures.selectorCount ?? null,
+                  detectedFeatures: onchainCodeFeatures.detectedFeatures ?? [],
+                  matchedSelectors: onchainCodeFeatures.matchedSelectors ?? [],
+                  codeShape: onchainCodeFeatures.codeShape ?? null,
+                  complexityHint: onchainCodeFeatures.complexityHint ?? null,
+                  featureReason: onchainCodeFeatures.featureReason ?? null,
+                  boundaryNote: onchainCodeFeatures.boundaryNote ?? null
+                }
+              : null,
+            lpCandidates: lpCandidates.map((item) => ({
+              id: item.id,
+              dexLabel: item.dex_label,
+              quoteTokenLabel: item.quote_token_label,
+              lpAddress: item.lp_address,
+              confidence: item.confidence,
+              rationale: item.rationale,
+              status: item.status,
+              createdAt: item.created_at,
+              updatedAt: item.updated_at
+            }))
           }
         : null,
     relatedRuns: relatedRuns.map((run) => ({

@@ -6,6 +6,8 @@ export { collectDiscordMessages } from "./collection/collect-discord-messages.js
 export { collectTelegramUpdates } from "./collection/collect-telegram-updates.js";
 export { collectTwitterBrowser } from "./collection/collect-twitter-browser.js";
 export { collectTwitterPublic } from "./collection/collect-twitter-public.js";
+export { confirmLpCandidate } from "./onchain/confirm-lp-candidate.js";
+export { discoverLpCandidates } from "./onchain/discover-lp-candidates.js";
 export { generateReport } from "./analysis/generate-report.js";
 export { loadCommunityBotRuntimeConfig } from "./config/community-bot-config.js";
 export { loadRuntimeSnapshot } from "./config/runtime-snapshot.js";
