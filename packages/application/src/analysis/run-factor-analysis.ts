@@ -88,6 +88,25 @@ interface CommunityQualityAssessmentPayload {
   keyFindings?: string[];
 }
 
+interface ContentDomainPagePayload {
+  domainType?: "website" | "docs" | "whitepaper";
+  pageUrl?: string;
+  discoveredFrom?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  cleanText?: string | null;
+  internalLinks?: string[];
+  contentLength?: number | null;
+  pageIndex?: number | null;
+  pageLimit?: number | null;
+  sectionType?: "full_document" | "section";
+  sectionIndex?: number | null;
+  heading?: string | null;
+  text?: string | null;
+  sectionCount?: number | null;
+  pageCount?: number | null;
+}
+
 const clampScore = (score: number): number => Math.max(1, Math.min(10, Number(score.toFixed(1))));
 
 const keywordBoostMap: Record<string, string[]> = {
@@ -186,6 +205,101 @@ const extractCommunityQualityAssessment = (evidences: EvidenceRecord[]) => {
   }
 
   return null;
+};
+
+const extractContentDomainPages = (evidences: EvidenceRecord[]) =>
+  evidences
+    .filter((evidence) =>
+      evidence.evidence_type === "website_page" ||
+      evidence.evidence_type === "docs_page" ||
+      evidence.evidence_type === "whitepaper_page"
+    )
+    .map((evidence) => ({
+      evidenceId: evidence.id,
+      evidenceType: evidence.evidence_type,
+      payload: parseJsonObject<ContentDomainPagePayload>(evidence.raw_content),
+      title: evidence.title,
+      summary: evidence.summary
+    }))
+    .filter((item) => item.payload !== null);
+
+const buildContentDomainNotes = (factorKey: string, evidences: EvidenceRecord[]): string[] => {
+  if (
+    factorKey !== "website_completeness" &&
+    factorKey !== "whitepaper_depth" &&
+    factorKey !== "product_functionality" &&
+    factorKey !== "narrative_market_fit" &&
+    factorKey !== "claim_whitepaper_consistency" &&
+    factorKey !== "whitepaper_onchain_consistency"
+  ) {
+    return [];
+  }
+
+  const pages = extractContentDomainPages(evidences);
+  if (pages.length === 0) {
+    return [];
+  }
+
+  const websitePages = pages.filter((item) => item.evidenceType === "website_page");
+  const docsPages = pages.filter((item) => item.evidenceType === "docs_page");
+  const whitepaperFull = pages.filter(
+    (item) => item.evidenceType === "whitepaper_page" && item.payload?.sectionType === "full_document"
+  );
+  const whitepaperSections = pages.filter(
+    (item) => item.evidenceType === "whitepaper_page" && item.payload?.sectionType === "section"
+  );
+
+  const notes: string[] = [];
+
+  if (websitePages.length > 0) {
+    const sampleUrls = websitePages
+      .slice(0, 5)
+      .map((item) => item.payload?.pageUrl ?? item.title ?? "unknown")
+      .join(" | ");
+    const websiteLimit = websitePages[0]?.payload?.pageLimit ?? null;
+    notes.push(
+      `Website domain snapshot: ${websitePages.length} pages collected${websiteLimit ? ` (page limit ${websiteLimit})` : ""}. Sample pages: ${sampleUrls}.`
+    );
+  }
+
+  if (docsPages.length > 0) {
+    const docsHeadings = docsPages
+      .slice(0, 8)
+      .map((item) => item.payload?.title ?? item.title ?? item.payload?.pageUrl ?? "unknown")
+      .join(" | ");
+    const docsLimit = docsPages[0]?.payload?.pageLimit ?? null;
+    notes.push(
+      `Docs domain snapshot: ${docsPages.length} pages collected${docsLimit ? ` (page limit ${docsLimit})` : ""}. Sample topics: ${docsHeadings}.`
+    );
+  }
+
+  if (whitepaperFull.length > 0 || whitepaperSections.length > 0) {
+    const sectionCount =
+      whitepaperFull[0]?.payload?.sectionCount ??
+      whitepaperSections.length;
+    const sectionHeadings = whitepaperSections
+      .slice(0, 8)
+      .map((item) => item.payload?.heading ?? item.title ?? "unknown")
+      .join(" | ");
+    notes.push(
+      `Whitepaper snapshot: ${sectionCount} section chunks collected. Sample section headings: ${sectionHeadings || "none"}.`
+    );
+  }
+
+  const totalTextLength = pages.reduce((sum, item) => {
+    const contentLength =
+      item.payload?.contentLength ??
+      item.payload?.cleanText?.length ??
+      item.payload?.text?.length ??
+      0;
+    return sum + (Number.isFinite(contentLength) ? Number(contentLength) : 0);
+  }, 0);
+
+  if (totalTextLength > 0) {
+    notes.push(`Content-domain material size: approximately ${totalTextLength} characters of cleaned text.`);
+  }
+
+  return notes;
 };
 
 const buildTwitterMetricNotes = (factorKey: string, evidences: EvidenceRecord[]): string[] => {
@@ -366,9 +480,69 @@ const detectCommunityBoost = (factorKey: string, evidences: EvidenceRecord[]): n
   return boost;
 };
 
+const detectContentDomainBoost = (factorKey: string, evidences: EvidenceRecord[]): number => {
+  if (
+    factorKey !== "website_completeness" &&
+    factorKey !== "whitepaper_depth" &&
+    factorKey !== "product_functionality" &&
+    factorKey !== "narrative_market_fit" &&
+    factorKey !== "claim_whitepaper_consistency" &&
+    factorKey !== "whitepaper_onchain_consistency"
+  ) {
+    return 0;
+  }
+
+  const pages = extractContentDomainPages(evidences);
+  if (pages.length === 0) {
+    return 0;
+  }
+
+  const websitePages = pages.filter((item) => item.evidenceType === "website_page").length;
+  const docsPages = pages.filter((item) => item.evidenceType === "docs_page").length;
+  const whitepaperSections = pages.filter(
+    (item) => item.evidenceType === "whitepaper_page" && item.payload?.sectionType === "section"
+  ).length;
+  const totalPages = pages.length;
+
+  if (factorKey === "website_completeness") {
+    let boost = 0.3;
+    boost += websitePages >= 8 ? 1.4 : websitePages >= 4 ? 0.8 : websitePages >= 2 ? 0.4 : 0.1;
+    boost += docsPages >= 6 ? 0.6 : docsPages >= 2 ? 0.3 : 0;
+    return boost;
+  }
+
+  if (factorKey === "whitepaper_depth") {
+    let boost = 0.2;
+    boost += whitepaperSections >= 8 ? 1.6 : whitepaperSections >= 4 ? 1.0 : whitepaperSections >= 2 ? 0.4 : 0;
+    boost += docsPages >= 10 ? 0.5 : docsPages >= 4 ? 0.2 : 0;
+    return boost;
+  }
+
+  if (factorKey === "product_functionality") {
+    let boost = 0.2;
+    boost += docsPages >= 8 ? 0.9 : docsPages >= 3 ? 0.4 : 0;
+    boost += websitePages >= 4 ? 0.5 : websitePages >= 2 ? 0.2 : 0;
+    return boost;
+  }
+
+  if (factorKey === "narrative_market_fit") {
+    let boost = 0.2;
+    boost += totalPages >= 12 ? 0.8 : totalPages >= 6 ? 0.4 : 0.1;
+    boost += whitepaperSections >= 4 ? 0.5 : 0;
+    return boost;
+  }
+
+  let boost = 0.2;
+  boost += whitepaperSections >= 4 ? 0.6 : 0.2;
+  boost += docsPages >= 4 ? 0.4 : 0;
+  boost += websitePages >= 2 ? 0.2 : 0;
+  return boost;
+};
+
 const buildUserPrompt = (factor: FactorDefinition, evidences: EvidenceRecord[], promptTemplate: PromptTemplateBundle): string => {
   const twitterMetricNotes = buildTwitterMetricNotes(factor.factor_key, evidences);
   const communityNotes = buildCommunityNotes(factor.factor_key, evidences);
+  const contentDomainNotes = buildContentDomainNotes(factor.factor_key, evidences);
 
   return [
     promptTemplate.task,
@@ -391,6 +565,9 @@ const buildUserPrompt = (factor: FactorDefinition, evidences: EvidenceRecord[], 
     ),
     ...(twitterMetricNotes.length > 0 ? ["", "Twitter structured signals:", ...twitterMetricNotes.map((note) => `- ${note}`)] : []),
     ...(communityNotes.length > 0 ? ["", "Community structured signals:", ...communityNotes.map((note) => `- ${note}`)] : []),
+    ...(contentDomainNotes.length > 0
+      ? ["", "Content-domain structured signals:", ...contentDomainNotes.map((note) => `- ${note}`)]
+      : []),
     "",
     "Return strict JSON that matches the provided schema."
   ].join("\n");
@@ -462,7 +639,8 @@ const runHeuristicFallback = (
   const keywordBoost = detectKeywordBoost(factor.factor_key, matchedEvidences);
   const twitterEngagementBoost = detectTwitterEngagementBoost(factor.factor_key, evidences);
   const communityBoost = detectCommunityBoost(factor.factor_key, evidences);
-  const score = clampScore(1 + coverage * 7 + keywordBoost + twitterEngagementBoost + communityBoost);
+  const contentDomainBoost = detectContentDomainBoost(factor.factor_key, evidences);
+  const score = clampScore(1 + coverage * 7 + keywordBoost + twitterEngagementBoost + communityBoost + contentDomainBoost);
   const confidenceLevel: "low" | "medium" | "high" =
     coverage >= 0.9 ? "high" : coverage >= 0.4 ? "medium" : "low";
   const evidenceSufficiency: "none" | "partial" | "sufficient" =
@@ -471,7 +649,7 @@ const runHeuristicFallback = (
   const reason =
     matchedEvidences.length === 0
       ? `No evidence matched the expected evidence types for ${factor.factor_name}, so the factor remains at a low-confidence baseline.`
-      : `Heuristic fallback used prompt-defined factor context plus ${matchedEvidences.length} matching evidence items, with coverage ${coverage.toFixed(2)}, keyword boost ${keywordBoost.toFixed(2)}, twitter engagement boost ${twitterEngagementBoost.toFixed(2)}, and community boost ${communityBoost.toFixed(2)}.`;
+      : `Heuristic fallback used prompt-defined factor context plus ${matchedEvidences.length} matching evidence items, with coverage ${coverage.toFixed(2)}, keyword boost ${keywordBoost.toFixed(2)}, twitter engagement boost ${twitterEngagementBoost.toFixed(2)}, community boost ${communityBoost.toFixed(2)}, and content-domain boost ${contentDomainBoost.toFixed(2)}.`;
 
   const riskPoints =
     matchedEvidences.length === 0
@@ -493,13 +671,14 @@ const runHeuristicFallback = (
 
   const twitterMetricNotes = buildTwitterMetricNotes(factor.factor_key, evidences);
   const communityNotes = buildCommunityNotes(factor.factor_key, evidences);
+  const contentDomainNotes = buildContentDomainNotes(factor.factor_key, evidences);
 
   return {
     aiScore: score,
     confidenceLevel,
     scoreReason: fallbackReason
-      ? `${reason} ${twitterMetricNotes.join(" ")} ${communityNotes.join(" ")} Remote analysis fallback reason: ${fallbackReason}.`.trim()
-      : `${reason} ${twitterMetricNotes.join(" ")} ${communityNotes.join(" ")}`.trim(),
+      ? `${reason} ${twitterMetricNotes.join(" ")} ${communityNotes.join(" ")} ${contentDomainNotes.join(" ")} Remote analysis fallback reason: ${fallbackReason}.`.trim()
+      : `${reason} ${twitterMetricNotes.join(" ")} ${communityNotes.join(" ")} ${contentDomainNotes.join(" ")}`.trim(),
     riskPoints,
     opportunityPoints,
     evidenceRefs: matchedEvidences.map((evidence) => evidence.id),

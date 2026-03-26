@@ -73,6 +73,14 @@ type FinalAnalysisReport = {
     conclusion: string;
     data_quality_note: string;
     recommended_decision: string;
+    content_domain_overview?: {
+      website_page_count: number;
+      docs_page_count: number;
+      whitepaper_section_count: number;
+      total_characters: number;
+      sample_topics: string[];
+      note: string;
+    } | null;
   };
   dimension_overview: {
     items: Array<{
@@ -104,6 +112,14 @@ type FinalAnalysisReport = {
         captured_at: string;
       }>;
     }>;
+    content_domain_snapshot?: {
+      website_page_count: number;
+      docs_page_count: number;
+      whitepaper_section_count: number;
+      total_characters: number;
+      sample_topics: string[];
+      note: string;
+    } | null;
   };
   conclusion_and_next_step: {
     conclusion: string;
@@ -955,7 +971,7 @@ export default function App() {
             .split(/\r?\n|,/)
             .map((value) => value.trim())
             .filter(Boolean)
-            .map((value) => ({ type: "url" as const, value })),
+            .map((value) => ({ type: "contract" as const, value })),
           { type: "text", value: notesInput }
         ].filter((item) => item.value.trim())
       };
@@ -1067,6 +1083,40 @@ export default function App() {
   const canRunAnalysis = hasTask && hasFreshCollection && !collectionInProgress;
   const hasAnalysisResult = Boolean(finalReport || report?.report || (snapshot?.factors.length ?? 0) > 0);
   const canReview = hasTask && hasAnalysisResult && !collectionInProgress;
+  const latestTwitterBrowserRun =
+    runs
+      .filter((run) => run.collector_key === "twitter_browser_fetch")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null;
+  const twitterBrowserStatus = !hasTask
+    ? null
+    : isTwitterQueued || latestTwitterBrowserRun?.status === "queued"
+      ? { tone: "pending", label: "已加入队列", detail: "后台 Worker 尚未开始抓取，通常会在几秒内接手。" }
+      : latestTwitterBrowserRun?.status === "running"
+        ? { tone: "pending", label: "抓取中", detail: "Twitter 浏览器采集正在运行，请稍候等待结果刷新。" }
+        : latestTwitterBrowserRun?.status === "completed"
+          ? { tone: "ok", label: "抓取完成", detail: "浏览器采集已完成，来源详情中可以查看内容和互动信号。" }
+          : latestTwitterBrowserRun?.status === "partial"
+            ? {
+                tone: "warn",
+                label: "部分完成",
+                detail: latestTwitterBrowserRun.warnings[0] ?? "浏览器采集返回了部分结果，但内容质量仍有限。"
+              }
+            : latestTwitterBrowserRun?.status === "failed"
+              ? {
+                  tone: "warn",
+                  label: "抓取失败",
+                  detail: latestTwitterBrowserRun.warnings[0] ?? "浏览器采集未能产出有效结果。"
+                }
+              : null;
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    if (!(isTwitterQueued || latestTwitterBrowserRun?.status === "running")) return;
+    const timer = window.setInterval(() => {
+      void refreshSelectedTask(selectedTaskId);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [selectedTaskId, isTwitterQueued, latestTwitterBrowserRun?.status]);
 
   const handleToggleDimension = (dimensionName: string) => {
     setExpandedDimensions((current) => {
@@ -1205,6 +1255,12 @@ export default function App() {
                 <button type="button" className="submit-review secondary-action" onClick={() => void runAction("正在采集 Discord 社区...", "collect-discord")} disabled={!hasTask || collectionInProgress}>采集 Discord</button>
                 <button type="button" className="submit-review secondary-action" onClick={() => void runAction("正在采集链上指标...", "collect-onchain")} disabled={!hasTask || collectionInProgress}>采集链上</button>
               </div>
+              {twitterBrowserStatus ? (
+                <div className={`collector-status collector-status-${twitterBrowserStatus.tone}`}>
+                  <strong>Twitter 浏览器采集：{twitterBrowserStatus.label}</strong>
+                  <p>{twitterBrowserStatus.detail}</p>
+                </div>
+              ) : null}
             </section>
 
             <section className="stage-card">
@@ -1384,6 +1440,33 @@ export default function App() {
                         ))}
                       </div>
                     </section>
+
+                    {finalReport.overall_assessment.content_domain_overview ? (
+                      <section className="report-section">
+                        <div className="panel-title-row">
+                          <h4>内容资料面概况</h4>
+                          <span className="panel-tag">
+                            {finalReport.overall_assessment.content_domain_overview.website_page_count +
+                              finalReport.overall_assessment.content_domain_overview.docs_page_count +
+                              finalReport.overall_assessment.content_domain_overview.whitepaper_section_count} 条内容快照
+                          </span>
+                        </div>
+                        <p>{finalReport.overall_assessment.content_domain_overview.note}</p>
+                        <div className="chip-row">
+                          <span className="chip">官网 {finalReport.overall_assessment.content_domain_overview.website_page_count} 页</span>
+                          <span className="chip">Docs {finalReport.overall_assessment.content_domain_overview.docs_page_count} 页</span>
+                          <span className="chip">白皮书 {finalReport.overall_assessment.content_domain_overview.whitepaper_section_count} 段</span>
+                          <span className="chip">约 {finalReport.overall_assessment.content_domain_overview.total_characters} 字符</span>
+                        </div>
+                        {finalReport.overall_assessment.content_domain_overview.sample_topics.length > 0 ? (
+                          <div className="chip-row">
+                            {finalReport.overall_assessment.content_domain_overview.sample_topics.map((topic) => (
+                              <span key={`topic-${topic}`} className="chip neutral-chip">{topic}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </section>
+                    ) : null}
 
                     <section className="report-section">
                       <div className="panel-title-row">

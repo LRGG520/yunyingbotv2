@@ -5,11 +5,18 @@ import type { AppDbClient } from "../db/client.js";
 import { loadRepoEnv } from "../config/load-env.js";
 import { insertEvidenceRecord, updateTaskStatuses } from "../repositories/core-task-chain-repository.js";
 import { resolveBrowserExecutablePath } from "./browser-runtime.js";
+import { resolveTwitterBrowserUserDataDir } from "./twitter-browser-profile.js";
 import { recordCollectionRunPg } from "./record-collection-run-pg.js";
+import { resolveTwitterStorageStatePath } from "./twitter-storage-state.js";
 import { chromium } from "playwright-core";
 
 const TWITTER_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const TWITTER_BROWSER_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+  "--disable-infobars",
+  "--lang=en-US"
+];
 
 const LOGIN_WALL_MARKERS = ["don’t miss what’s happening", "don't miss what's happening", "log in", "sign up", "join x today", "sign in to x"];
 const normalizeTwitterUrl = (value: string): string => value.replace(/^https:\/\/x\.com/i, "https://twitter.com");
@@ -17,15 +24,6 @@ const extractTweetId = (value: string): string | null => value.match(/\/status\/
 const clampInt = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 const clampScore = (value: number): number => Math.max(1, Math.min(10, Number(value.toFixed(1))));
 const nowIso = () => new Date().toISOString();
-
-const resolveTwitterStorageStatePath = (repoRoot: string): string => {
-  const env = loadRepoEnv(repoRoot);
-  const fromEnv = env.TWITTER_STORAGE_STATE_PATH?.trim();
-  if (fromEnv) {
-    return path.isAbsolute(fromEnv) ? fromEnv : path.join(repoRoot, fromEnv);
-  }
-  return path.join(repoRoot, "data", "local", "twitter-storage-state.json");
-};
 
 type TwitterPageStatus = "valid_tweet" | "weak_capture" | "blocked_wall" | "profile_or_unknown";
 interface ExtractedArticle {
@@ -75,21 +73,27 @@ const computeCommentQualityScore = (pageStatus: TwitterPageStatus, replies: Extr
 
 const captureTwitterPage = async (
   executablePath: string,
+  userDataDir: string,
   storageStatePath: string,
   sourceUrl: string,
   targetTweetId: string | null,
   targetReplyCount: number,
   maxScrollSteps: number
 ): Promise<TwitterPageExtraction> => {
-  const browser = await chromium.launch({ executablePath, headless: true });
+  mkdirSync(userDataDir, { recursive: true });
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    executablePath,
+    headless: true,
+    args: TWITTER_BROWSER_ARGS,
+    userAgent: TWITTER_BROWSER_USER_AGENT,
+    locale: "en-US",
+    viewport: { width: 1440, height: 1200 }
+  });
   try {
-    const context = await browser.newContext({
-      userAgent: TWITTER_BROWSER_USER_AGENT,
-      viewport: { width: 1440, height: 1200 },
-      locale: "en-US",
-      ...(existsSync(storageStatePath) ? { storageState: storageStatePath } : {})
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
-    const page = await context.newPage();
+    const page = context.pages()[0] ?? (await context.newPage());
     await page.goto(normalizeTwitterUrl(sourceUrl), { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2800);
 
@@ -275,7 +279,7 @@ const captureTwitterPage = async (
       commentQualityScore: computeCommentQualityScore(base.pageStatus, replies)
     };
   } finally {
-    await browser.close();
+    await context.close();
   }
 };
 
@@ -289,6 +293,7 @@ const buildTweetSummary = (capture: TwitterPageExtraction): string =>
 export const collectTwitterBrowserPg = async (db: AppDbClient, repoRoot: string, taskId: string): Promise<PublicCollectionResult> => {
   const env = loadRepoEnv(repoRoot);
   const browserExecutablePath = resolveBrowserExecutablePath(repoRoot);
+  const userDataDir = resolveTwitterBrowserUserDataDir(repoRoot);
   const storageStatePath = resolveTwitterStorageStatePath(repoRoot);
   const targetReplyCount = clampInt(Number(env.TWITTER_REPLY_TARGET ?? 50) || 50, 1, 100);
   const maxScrollSteps = clampInt(Number(env.TWITTER_BROWSER_MAX_SCROLL_STEPS ?? 18) || 18, 1, 60);
@@ -323,7 +328,15 @@ export const collectTwitterBrowserPg = async (db: AppDbClient, repoRoot: string,
 
   for (const source of sources) {
     try {
-      const capture = await captureTwitterPage(browserExecutablePath, storageStatePath, source.source_url, extractTweetId(source.source_url), targetReplyCount, maxScrollSteps);
+      const capture = await captureTwitterPage(
+        browserExecutablePath,
+        userDataDir,
+        storageStatePath,
+        source.source_url,
+        extractTweetId(source.source_url),
+        targetReplyCount,
+        maxScrollSteps
+      );
       await insertEvidenceRecord(db, { taskId, sourceId: source.id, evidenceType: "twitter_page_capture", title: capture.title, summary: `${capture.pageStatus}: ${capture.statusReason}`.slice(0, 500), rawContent: JSON.stringify(capture, null, 2), credibilityLevel: "low" });
       evidenceCount += 1;
       await insertEvidenceRecord(db, { taskId, sourceId: source.id, evidenceType: "twitter_page_assessment", title: `Twitter page assessment for ${source.source_url}`, summary: `page_status=${capture.pageStatus}; tweet_quality=${capture.tweetQualityScore}; comment_quality=${capture.commentQualityScore}; replies=${capture.replies.length}`.slice(0, 500), rawContent: JSON.stringify({ pageStatus: capture.pageStatus, statusReason: capture.statusReason, tweetQualityScore: capture.tweetQualityScore, commentQualityScore: capture.commentQualityScore, replyCount: capture.replies.length }, null, 2), credibilityLevel: capture.pageStatus === "valid_tweet" ? "medium" : "low" });

@@ -256,6 +256,42 @@ button {
   margin: 0;
 }
 
+.collector-status {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.collector-status strong {
+  font-size: 14px;
+}
+
+.collector-status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.collector-status-pending {
+  border-color: rgba(255, 184, 77, 0.28);
+  background: rgba(255, 184, 77, 0.08);
+}
+
+.collector-status-ok {
+  border-color: rgba(126, 245, 184, 0.28);
+  background: rgba(126, 245, 184, 0.08);
+}
+
+.collector-status-warn {
+  border-color: rgba(255, 111, 97, 0.28);
+  background: rgba(255, 111, 97, 0.08);
+}
+
 .stage-gate-board {
   display: grid;
   gap: 10px;

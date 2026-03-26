@@ -1,10 +1,10 @@
 import http from 'node:http';
 import path from 'node:path';
+import { collectPublicDomain } from './collect-public-domain.js';
 import {
   analyzeFactors,
   collectDiscordMessages,
   collectOnchain,
-  collectPublicWebDocs,
   collectTelegramUpdates,
   collectTwitterBrowser,
   collectTwitterPublic,
@@ -86,7 +86,11 @@ const server = http.createServer(async (req, res) => {
 
   const collectPublicTaskId = matchTaskRoute(url.pathname, 'collect-public');
   if (req.method === 'POST' && collectPublicTaskId) {
-    try { return sendJson(res, 200, await collectPublicWebDocs(db, collectPublicTaskId)); } catch (error) { return sendJson(res, 500, { error: 'collect_public_failed', message: error instanceof Error ? error.message : 'unknown_error' }); }
+    try {
+      return sendJson(res, 200, await collectPublicDomain(db, collectPublicTaskId));
+    } catch (error) {
+      return sendJson(res, 500, { error: 'collect_public_failed', message: error instanceof Error ? error.message : 'unknown_error' });
+    }
   }
 
   const collectWhitepaperTaskId = matchTaskRoute(url.pathname, 'collect-whitepaper-pdf');

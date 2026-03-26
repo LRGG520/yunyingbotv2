@@ -1,7 +1,10 @@
 import type { PublicCollectionResult } from "@yunyingbot/shared";
-import type { AppDbClient } from "../db/client.js";
-import { insertEvidenceRecord, updateTaskStatuses } from "../repositories/core-task-chain-repository.js";
-import { recordCollectionRunPg } from "./record-collection-run-pg.js";
+import {
+  insertEvidenceRecord,
+  updateTaskStatuses
+} from "@yunyingbot/application";
+import type { AppDbClient } from "../../../packages/application/src/db/client.js";
+import { recordCollectionRunPg } from "../../../packages/application/src/collection/record-collection-run-pg.js";
 
 const WEBSITE_PAGE_LIMIT = 30;
 const DOCS_PAGE_LIMIT = 50;
@@ -86,26 +89,16 @@ const extractInternalLinks = (html: string, baseUrl: string, maxLinks: number): 
 
   for (const match of matches) {
     const href = match[1]?.trim();
-    if (!href) {
-      continue;
-    }
+    if (!href) continue;
 
     try {
       const resolved = new URL(href, base);
-      if (resolved.origin !== base.origin) {
-        continue;
-      }
-      if (!looksLikeHtmlPage(resolved)) {
-        continue;
-      }
-      if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
-        continue;
-      }
+      if (resolved.origin !== base.origin) continue;
+      if (!looksLikeHtmlPage(resolved)) continue;
+      if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
       resolved.hash = "";
       links.add(normalizeUrlForDedup(resolved.toString()));
-      if (links.size >= maxLinks) {
-        break;
-      }
+      if (links.size >= maxLinks) break;
     } catch {
       continue;
     }
@@ -136,11 +129,7 @@ const fetchDomainPages = async (
 }> => {
   const entry = sanitizeUrl(entryUrl);
   if (!entry) {
-    return {
-      pages: [],
-      warnings: [`Invalid URL skipped: ${entryUrl}`],
-      failedUrls: [entryUrl]
-    };
+    return { pages: [], warnings: [`Invalid URL skipped: ${entryUrl}`], failedUrls: [entryUrl] };
   }
 
   const queue: Array<{ url: string; discoveredFrom: string | null }> = [{ url: entry, discoveredFrom: null }];
@@ -152,14 +141,10 @@ const fetchDomainPages = async (
 
   while (queue.length > 0 && pages.length < pageLimit) {
     const current = queue.shift();
-    if (!current) {
-      break;
-    }
+    if (!current) break;
 
     const normalizedCurrent = normalizeUrlForDedup(current.url);
-    if (visited.has(normalizedCurrent)) {
-      continue;
-    }
+    if (visited.has(normalizedCurrent)) continue;
     visited.add(normalizedCurrent);
 
     try {
@@ -199,15 +184,9 @@ const fetchDomainPages = async (
       });
 
       for (const discoveredUrl of internalLinks) {
-        if (pages.length + queue.length >= pageLimit) {
-          break;
-        }
-
+        if (pages.length + queue.length >= pageLimit) break;
         const normalizedDiscovered = normalizeUrlForDedup(discoveredUrl);
-        if (visited.has(normalizedDiscovered) || queued.has(normalizedDiscovered)) {
-          continue;
-        }
-
+        if (visited.has(normalizedDiscovered) || queued.has(normalizedDiscovered)) continue;
         queued.add(normalizedDiscovered);
         queue.push({ url: discoveredUrl, discoveredFrom: current.url });
       }
@@ -224,7 +203,7 @@ const fetchDomainPages = async (
   return { pages, warnings, failedUrls };
 };
 
-export const collectPublicWebDocsPg = async (db: AppDbClient, taskId: string): Promise<PublicCollectionResult> => {
+export const collectPublicDomain = async (db: AppDbClient, taskId: string): Promise<PublicCollectionResult> => {
   const sources = await db.query<{ id: string; source_url: string; source_type: string }>(
     `SELECT id, source_url, source_type
      FROM sources
@@ -247,9 +226,10 @@ export const collectPublicWebDocsPg = async (db: AppDbClient, taskId: string): P
       continue;
     }
 
+    const pageLimit = source.source_type === "website" ? WEBSITE_PAGE_LIMIT : DOCS_PAGE_LIMIT;
+    const evidenceType = source.source_type === "website" ? "website_page" : "docs_page";
+
     try {
-      const pageLimit = source.source_type === "website" ? WEBSITE_PAGE_LIMIT : DOCS_PAGE_LIMIT;
-      const evidenceType = source.source_type === "website" ? "website_page" : "docs_page";
       const collectedDomain = await fetchDomainPages(source.source_url, pageLimit);
 
       await db.execute(
@@ -309,27 +289,18 @@ export const collectPublicWebDocsPg = async (db: AppDbClient, taskId: string): P
     }
   }
 
-  await updateTaskStatuses(db, {
-    taskId,
-    collectionStatus: "evidence_ready"
-  });
+  await updateTaskStatuses(db, { taskId, collectionStatus: "evidence_ready" });
 
   await recordCollectionRunPg(db, {
     taskId,
     collectorKey: "public_web_fetch",
     sourceType: "website_docs",
-    status: evidenceCount > 0 && skippedSources.length === 0 ? "completed" : evidenceCount > 0 ? "partial" : "failed",
+    status: warnings.length > 0 ? "partial" : "completed",
     collectedCount: collectedSources.length,
     skippedCount: skippedSources.length,
     evidenceCount,
     warnings
   });
 
-  return {
-    taskId,
-    collectedSources,
-    skippedSources,
-    warnings,
-    evidenceCount
-  };
+  return { taskId, collectedSources, skippedSources, warnings, evidenceCount };
 };

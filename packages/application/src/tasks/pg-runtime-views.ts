@@ -149,6 +149,18 @@ interface OnchainCodeFeaturePayload {
   boundaryNote?: string;
 }
 
+interface ContentDomainPagePayload {
+  domainType?: "website" | "docs" | "whitepaper";
+  pageUrl?: string;
+  title?: string | null;
+  heading?: string | null;
+  contentLength?: number | null;
+  cleanText?: string | null;
+  text?: string | null;
+  sectionType?: "full_document" | "section";
+  sectionCount?: number | null;
+}
+
 type VersionMeta = {
   id: string;
   version_type: string;
@@ -233,8 +245,63 @@ const pickLatestVersion = (versions: VersionMeta[]) => {
   return versions[0] ?? null;
 };
 
+const buildContentDomainOverview = (evidences: EvidenceRow[]) => {
+  const contentEvidences = evidences
+    .filter((evidence) =>
+      evidence.evidence_type === "website_page" ||
+      evidence.evidence_type === "docs_page" ||
+      evidence.evidence_type === "whitepaper_page"
+    )
+    .map((evidence) => ({
+      evidenceType: evidence.evidence_type,
+      payload: parseJsonObject<ContentDomainPagePayload>(evidence.raw_content),
+      title: evidence.title
+    }))
+    .filter((item) => item.payload !== null);
+
+  if (contentEvidences.length === 0) {
+    return null;
+  }
+
+  const websitePages = contentEvidences.filter((item) => item.evidenceType === "website_page");
+  const docsPages = contentEvidences.filter((item) => item.evidenceType === "docs_page");
+  const whitepaperSections = contentEvidences.filter(
+    (item) => item.evidenceType === "whitepaper_page" && item.payload?.sectionType === "section"
+  );
+  const whitepaperWhole = contentEvidences.find(
+    (item) => item.evidenceType === "whitepaper_page" && item.payload?.sectionType === "full_document"
+  );
+
+  const totalCharacters = contentEvidences.reduce((sum, item) => {
+    const length =
+      item.payload?.contentLength ??
+      item.payload?.cleanText?.length ??
+      item.payload?.text?.length ??
+      0;
+    return sum + (Number.isFinite(length) ? Number(length) : 0);
+  }, 0);
+
+  const sampleTopics = Array.from(
+    new Set(
+      contentEvidences
+        .map((item) => item.payload?.heading ?? item.payload?.title ?? item.title ?? "")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 10);
+
+  return {
+    website_page_count: websitePages.length,
+    docs_page_count: docsPages.length,
+    whitepaper_section_count: whitepaperWhole?.payload?.sectionCount ?? whitepaperSections.length,
+    total_characters: totalCharacters,
+    sample_topics: sampleTopics,
+    note: `本次内容资料面已扩展：官网 ${websitePages.length} 页、Docs ${docsPages.length} 页、白皮书章节 ${whitepaperWhole?.payload?.sectionCount ?? whitepaperSections.length} 段。`
+  };
+};
+
 export const getTaskSnapshotPg = async (db: AppDbClient, taskId: string) => {
-  const [task, project, factors, versions, counts, report] = await Promise.all([
+  const [task, project, factors, versions, counts, report, inputs, sources, dimensions] = await Promise.all([
     db.one(`SELECT * FROM analysis_tasks WHERE id = $1`, [taskId]),
     db.one(
       `SELECT p.* FROM projects p JOIN analysis_tasks t ON t.project_id = p.id WHERE t.id = $1`,
@@ -256,7 +323,30 @@ export const getTaskSnapshotPg = async (db: AppDbClient, taskId: string) => {
       db.one<{ count: number }>(`SELECT COUNT(*)::int AS count FROM dimensions WHERE task_id = $1`, [taskId]),
       db.one<{ count: number }>(`SELECT COUNT(*)::int AS count FROM review_records WHERE task_id = $1`, [taskId])
     ]),
-    db.one(`SELECT * FROM reports WHERE task_id = $1`, [taskId])
+    db.one(`SELECT * FROM reports WHERE task_id = $1`, [taskId]),
+    db.query(
+      `SELECT id, input_type, raw_value, normalized_value, created_at
+       FROM task_inputs
+       WHERE task_id = $1
+       ORDER BY created_at ASC`,
+      [taskId]
+    ),
+    db.query(
+      `SELECT s.id, s.source_type, s.source_url, s.is_official, s.access_status, s.created_at, s.updated_at,
+              osc.chain_key, osc.chain_label, osc.contract_role_hint
+       FROM sources s
+       LEFT JOIN onchain_source_contexts osc ON osc.task_id = s.task_id AND osc.source_id = s.id
+       WHERE s.task_id = $1
+       ORDER BY s.created_at ASC, s.source_type ASC`,
+      [taskId]
+    ),
+    db.query(
+      `SELECT dimension_key, dimension_name, final_score, summary
+       FROM dimensions
+       WHERE task_id = $1
+       ORDER BY dimension_name ASC`,
+      [taskId]
+    )
   ]);
 
   if (!task || !project) {
@@ -277,11 +367,11 @@ export const getTaskSnapshotPg = async (db: AppDbClient, taskId: string) => {
       reviewCount: reviewCount?.count ?? 0,
       versionCount: versions.length
     },
-    inputs: [],
-    sources: [],
+    inputs,
+    sources,
     evidences: [],
     factors,
-    dimensions: [],
+    dimensions,
     reviews: [],
     versions
   };
@@ -668,7 +758,7 @@ export const getFinalAnalysisReportPg = async (db: AppDbClient, taskId: string) 
   const evidences =
     evidenceIds.length > 0
       ? await db.query<EvidenceRow>(
-          `SELECT id, source_id, evidence_type, title, summary, credibility_level, captured_at
+          `SELECT id, source_id, evidence_type, title, summary, raw_content, credibility_level, captured_at
            FROM evidences WHERE task_id = $1 AND id = ANY($2::text[])`,
           [taskId, evidenceIds]
         )
@@ -709,6 +799,8 @@ export const getFinalAnalysisReportPg = async (db: AppDbClient, taskId: string) 
       captured_at: item.captured_at
     }))
   }));
+
+  const contentDomainOverview = buildContentDomainOverview(evidences);
 
   return {
     meta: {

@@ -1,11 +1,12 @@
 {
   "name": "yunyingbotv2",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "pnpm@10.32.1",
   "scripts": {
     "dev:api": "pnpm --filter @yunyingbot/api dev",
     "dev:worker": "pnpm --filter @yunyingbot/worker dev",
+    "twitter:login": "tsx scripts/capture-twitter-storage-state.ts",
     "check": "pnpm -r typecheck",
     "test": "tsx tests/pg-smoke-e2e.ts",
     "stack:up": "docker compose up --build",
